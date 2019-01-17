@@ -15,6 +15,7 @@ using namespace std;
 #define SSTR( x ) static_cast< std::ostringstream & >( \
 ( std::ostringstream() << std::dec << x ) ).str()
 
+#define HAAR_DATA_DIR "/usr/share/opencv/haarcascades/"
 
 
 int main(int argc, char **argv)
@@ -50,16 +51,14 @@ int main(int argc, char **argv)
     }
     #endif
     // Read video
-    VideoCapture video("/home/user/Downloads/mcem0_head.mpg");
-    
+    VideoCapture video("mcem0_head.mpg");
+
     // Exit if video is not opened
     if(!video.isOpened())
     {
         cout << "Could not read video file" << endl;
         return 1;
-        
     }
-
 
     // Read first frame
     Mat frame;
@@ -67,36 +66,31 @@ int main(int argc, char **argv)
 
     // Detect Face using Haar Cascade
     CascadeClassifier face_cascade;
-    face_cascade.load( "/home/user/OpenCV_Installed/opencv-3.3.1/data/haarcascades/haarcascade_frontalface_alt2.xml" );
+    face_cascade.load(HAAR_DATA_DIR "haarcascade_frontalface_alt2.xml");
     std::vector<Rect> f;
-    face_cascade.detectMultiScale(frame,f, 1.1, 2, 0|CV_HAAR_SCALE_IMAGE);
+    face_cascade.detectMultiScale(frame, f, 1.1, 2, 0 | CV_HAAR_SCALE_IMAGE);
 
-    // Define initial bounding box for the face detected in first frame i.e. f[0]. Convert Rect co ordinates to Rect2D
+    // Define initial bounding box for the face detected in first frame i.e.
+    // f[0]. Convert Rect co ordinates to Rect2D.
     Rect2d bbox(f[0].x,f[0].y,f[0].width,f[0].height);
-    
-    // Uncomment the line below to select a a bounding box manually
-   // bbox = selectROI(frame, false);
 
+    // Uncomment the line below to select a a bounding box manually
+    // bbox = selectROI(frame, false);
 
     // Display bounding box.
     rectangle(frame, bbox, Scalar( 255, 0, 0 ), 2, 1 );
     imshow("Tracking", frame);
-    
+
     tracker->init(frame, bbox);
-    
+
     while(video.read(frame))
     {
-     
         // Start timer
         double timer = (double)getTickCount();
-        
         // Update the tracking result
         bool ok = tracker->update(frame, bbox);
-        
         // Calculate Frames per second (FPS)
         float fps = getTickFrequency() / ((double)getTickCount() - timer);
-        
-        
         if (ok)
         {
             // Tracking success : Draw the tracked object
@@ -105,28 +99,25 @@ int main(int argc, char **argv)
         else
         {
             // Tracking failure detected.
-            putText(frame, "Tracking failure detected", Point(100,80), FONT_HERSHEY_SIMPLEX, 0.75, Scalar(0,0,255),2);
+            putText(frame, "Tracking failure detected", Point(100,80),
+                    FONT_HERSHEY_SIMPLEX, 0.75, Scalar(0,0,255),2);
         }
-        
+
         // Display tracker type on frame
-        putText(frame, trackerType + " Tracker", Point(100,20), FONT_HERSHEY_SIMPLEX, 0.75, Scalar(50,170,50),2);
-        
+        putText(frame, trackerType + " Tracker", Point(100,20),
+                FONT_HERSHEY_SIMPLEX, 0.75, Scalar(50,170,50),2);
         // Display FPS on frame
-        putText(frame, "FPS : " + SSTR(int(fps)), Point(100,50), FONT_HERSHEY_SIMPLEX, 0.75, Scalar(50,170,50), 2);
+        putText(frame, "FPS : " + SSTR(int(fps)), Point(100,50),
+                FONT_HERSHEY_SIMPLEX, 0.75, Scalar(50,170,50), 2);
 
         // Display frame.
         imshow("Tracking", frame);
-        
+
         // Exit if ESC pressed.
         int k = waitKey(1);
         if(k == 27)
         {
             break;
         }
-
     }
-    
-
-    
 }
-
