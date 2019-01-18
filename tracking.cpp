@@ -1,7 +1,14 @@
-/************************************************************************************************************************
- * Author     : Manu BN
- * Description: Detect face in the first frame using OpenCV's Haar cascade and track the same using 5 different inbuilt trackers namely :  BOOSTING, MIL, KCF, TLD and MEDIANFLOW
- ***********************************************************************************************************************/
+/*******************************************************************************
+ * Author     : Manu BN, Alfonso Sanchez-Beato
+ * Description: Detect face in the first frame using OpenCV's Haar cascade and
+ * track the same using 5 different inbuilt trackers namely :
+ * BOOSTING, MIL, KCF, TLD and MEDIANFLOW
+ ******************************************************************************/
+#include <atomic>
+#include <future>
+#include <mutex>
+#include <thread>
+#include <utility>
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/tracking.hpp>
@@ -66,7 +73,13 @@ bool detect_face(Tracker* tracker, Mat& frame, Rect2d& bbox)
     return true;
 }
 
-int main(int argc, char **argv)
+mutex frameMtx_g, trackDataMtx_g;
+atomic_bool cv_work_busy_g, finish_g;
+Mat frame_g;
+Rect2d bbox_g;
+condition_variable frameCondition_g;
+
+void detect_and_track_loop(promise<Rect2d>&& trackDataProm)
 {
     // List of tracker types in OpenCV 3.2
     // NOTE : GOTURN implementation is buggy and does not work.
@@ -96,6 +109,40 @@ int main(int argc, char **argv)
             tracker = TrackerGOTURN::create();
     }
     #endif
+
+    bool tracking = false;
+    Rect2d bbox;
+
+    while (true) {
+        {
+            std::unique_lock<mutex> lock(frameMtx_g);
+            frameCondition_g.wait(lock);
+            cv_work_busy_g = true;
+
+            if (tracking)
+                tracking = track_frame(trackerType, bbox, tracker, frame_g);
+
+            if (!tracking)
+                tracking = detect_face(tracker, frame_g, bbox);
+
+            cout << "Size is " << frame_g.cols << " x " << frame_g.rows
+                 << " . Tracking: " << tracking << endl;
+
+            cv_work_busy_g = false;
+        }
+
+        if (tracking) {
+            lock_guard<decltype(trackDataMtx_g)> lock(trackDataMtx_g);
+            bbox_g = bbox;
+        }
+
+        if (finish_g)
+            break;
+    }
+}
+
+int main(int argc, char **argv)
+{
     // Read video
     //VideoCapture video("mcem0_head.mpg");
     VideoCapture video(0);
@@ -107,18 +154,29 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    promise<Rect2d> trackDataProm;
+    future<Rect2d> trackDataFut = trackDataProm.get_future();
+    thread detectAndTrack(detect_and_track_loop, move(trackDataProm));
+    double scale_f = 2.;
+
     Mat frame;
-    Rect2d bbox;
-    bool tracking = false;
     while(video.read(frame))
     {
-        if (tracking)
-            tracking = track_frame(trackerType, bbox, tracker, frame);
+        if (!cv_work_busy_g) {
+            lock_guard<decltype(frameMtx_g)> lock(frameMtx_g);
+            //frame_g = frame.clone();
+            resize(frame, frame_g, cv::Size(), 1/scale_f, 1/scale_f);
+            frameCondition_g.notify_one();
+        }
 
-        if (!tracking)
-            tracking = detect_face(tracker, frame, bbox);
+        {
+            lock_guard<decltype(trackDataMtx_g)> lock(trackDataMtx_g);
+            //Rect2d bbox = 2*bbox_g;
+            Rect2d bbox(scale_f*bbox_g.x, scale_f*bbox_g.y,
+                        scale_f*bbox_g.width, scale_f*bbox_g.height);
+            rectangle(frame, bbox, Scalar( 255, 0, 0), 2, 1);
+        }
 
-        // Display frame.
         imshow("Tracking", frame);
 
         // Exit if ESC pressed.
@@ -126,4 +184,7 @@ int main(int argc, char **argv)
         if(k == 27)
             break;
     }
+
+    finish_g = true;
+    detectAndTrack.join();
 }
