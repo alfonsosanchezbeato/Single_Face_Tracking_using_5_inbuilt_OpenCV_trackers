@@ -73,19 +73,45 @@ bool detect_face(Tracker* tracker, Mat& frame, Rect2d& bbox)
     return true;
 }
 
-mutex frameMtx_g, trackDataMtx_g;
-atomic_bool cv_work_busy_g, finish_g;
-Mat frame_g;
-Rect2d bbox_g;
-condition_variable frameCondition_g;
+// mutex frameMtx_g, trackDataMtx_g;
+// atomic_bool cv_work_busy_g, finish_g;
+// Mat frame_g;
+// Rect2d bbox_g;
+// condition_variable frameCondition_g;
 
-void detect_and_track_loop(promise<Rect2d>&& trackDataProm)
+// class OpenCVThread
+// {
+// public:
+//     OpenCVThread(atomic_bool &cv_work_busy, atomic_bool &finish,
+//                     mutex &frameMtx, condition_variable &frameCondition,
+//                     Mat &frame, mutex &trackDataMtx, Rect2d &bbox)
+//     {
+//         cv_work_busy_ = cv_work_busy;
+//         finish_ = finish;
+//         frameMtx_ = frameMtx;
+//         frameCondition_ = frameCondition;
+//         frame_ = frame;
+//         trackDataMtx_ = trackDataMtx;
+//         bbox_ = bbox;
+//     }
+
+// private:
+//     mutex &frameMtx_, &trackDataMtx_;
+//     atomic_bool &cv_work_busy_, &finish_;
+//     Mat &frame_;
+//     Rect2d &bbox_;
+//     condition_variable &frameCondition_;
+// };
+
+void detect_and_track_loop(atomic_bool &cv_work_busy_g, atomic_bool &finish_g,
+                           mutex &frameMtx_g, condition_variable &frameCondition_g,
+                           Mat &frame_g, mutex &trackDataMtx_g, Rect2d &bbox_g)
 {
     // List of tracker types in OpenCV 3.2
     // NOTE : GOTURN implementation is buggy and does not work.
     string trackerTypes[6] = {"BOOSTING", "MIL", "KCF", "TLD","MEDIANFLOW", "GOTURN"};
     // Create a tracker and select type by choosing indicies
-    string trackerType = trackerTypes[4];
+    string trackerType = trackerTypes[4]; // MEDIANFLOW
 
     Ptr<Tracker> tracker;
 
@@ -154,9 +180,14 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    promise<Rect2d> trackDataProm;
-    future<Rect2d> trackDataFut = trackDataProm.get_future();
-    thread detectAndTrack(detect_and_track_loop, move(trackDataProm));
+    mutex frameMtx_g, trackDataMtx_g;
+    atomic_bool cv_work_busy_g{false}, finish_g{false};
+    Mat frame_g;
+    Rect2d bbox_g;
+    condition_variable frameCondition_g;
+    thread detectAndTrack(detect_and_track_loop, ref(cv_work_busy_g), ref(finish_g),
+                          ref(frameMtx_g), ref(frameCondition_g),
+                          ref(frame_g), ref(trackDataMtx_g), ref(bbox_g));
     double scale_f = 2.;
 
     Mat frame;
@@ -164,7 +195,7 @@ int main(int argc, char **argv)
     {
         if (!cv_work_busy_g) {
             lock_guard<decltype(frameMtx_g)> lock(frameMtx_g);
-            //frame_g = frame.clone();
+            // Makes a copy to the shared frame
             resize(frame, frame_g, cv::Size(), 1/scale_f, 1/scale_f);
             frameCondition_g.notify_one();
         }
