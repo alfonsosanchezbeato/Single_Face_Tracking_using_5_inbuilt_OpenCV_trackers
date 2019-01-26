@@ -103,9 +103,17 @@ bool detect_face(Tracker* tracker, Mat& frame, Rect2d& bbox)
 //     condition_variable &frameCondition_;
 // };
 
+
+class TrackData {
+public:
+    mutex mtx;
+    Rect2d bbox;
+    bool tracking;
+};
+
 void detect_and_track_loop(atomic_bool &cv_work_busy_g, atomic_bool &finish_g,
                            mutex &frameMtx_g, condition_variable &frameCondition_g,
-                           Mat &frame_g, mutex &trackDataMtx_g, Rect2d &bbox_g)
+                           Mat &frame_g, TrackData &trackData)
 {
     // List of tracker types in OpenCV 3.2
     // NOTE : GOTURN implementation is buggy and does not work.
@@ -157,9 +165,10 @@ void detect_and_track_loop(atomic_bool &cv_work_busy_g, atomic_bool &finish_g,
             cv_work_busy_g = false;
         }
 
-        if (tracking) {
-            lock_guard<decltype(trackDataMtx_g)> lock(trackDataMtx_g);
-            bbox_g = bbox;
+        if (trackData.bbox != bbox || trackData.tracking != tracking) {
+            lock_guard<decltype(trackData.mtx)> lock(trackData.mtx);
+            trackData.bbox = bbox;
+            trackData.tracking = tracking;
         }
 
         if (finish_g)
@@ -180,14 +189,14 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    mutex frameMtx_g, trackDataMtx_g;
+    mutex frameMtx_g;
     atomic_bool cv_work_busy_g{false}, finish_g{false};
     Mat frame_g;
-    Rect2d bbox_g;
+    TrackData trackData;
     condition_variable frameCondition_g;
     thread detectAndTrack(detect_and_track_loop, ref(cv_work_busy_g), ref(finish_g),
                           ref(frameMtx_g), ref(frameCondition_g),
-                          ref(frame_g), ref(trackDataMtx_g), ref(bbox_g));
+                          ref(frame_g), ref(trackData));
     double scale_f = 2.;
 
     Mat frame;
@@ -201,11 +210,12 @@ int main(int argc, char **argv)
         }
 
         {
-            lock_guard<decltype(trackDataMtx_g)> lock(trackDataMtx_g);
-            //Rect2d bbox = 2*bbox_g;
-            Rect2d bbox(scale_f*bbox_g.x, scale_f*bbox_g.y,
-                        scale_f*bbox_g.width, scale_f*bbox_g.height);
-            rectangle(frame, bbox, Scalar( 255, 0, 0), 2, 1);
+            lock_guard<decltype(trackData.mtx)> lock(trackData.mtx);
+            if (trackData.tracking) {
+                Rect2d bbox(scale_f*trackData.bbox.x, scale_f*trackData.bbox.y,
+                            scale_f*trackData.bbox.width, scale_f*trackData.bbox.height);
+                rectangle(frame, bbox, Scalar( 255, 0, 0), 2, 1);
+            }
         }
 
         imshow("Tracking", frame);
