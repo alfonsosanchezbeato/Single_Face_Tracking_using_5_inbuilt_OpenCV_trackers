@@ -111,7 +111,7 @@ public:
     bool tracking;
 };
 
-void detect_and_track_loop(atomic_bool &cv_work_busy_g, atomic_bool &finish_g,
+void detect_and_track_loop(atomic_bool &finish_g,
                            mutex &frameMtx_g, condition_variable &frameCondition_g,
                            Mat &frame_g, TrackData &trackData)
 {
@@ -151,7 +151,6 @@ void detect_and_track_loop(atomic_bool &cv_work_busy_g, atomic_bool &finish_g,
         {
             std::unique_lock<mutex> lock(frameMtx_g);
             frameCondition_g.wait(lock);
-            cv_work_busy_g = true;
 
             if (tracking)
                 tracking = track_frame(trackerType, bbox, tracker, frame_g);
@@ -161,8 +160,6 @@ void detect_and_track_loop(atomic_bool &cv_work_busy_g, atomic_bool &finish_g,
 
             cout << "Size is " << frame_g.cols << " x " << frame_g.rows
                  << " . Tracking: " << tracking << endl;
-
-            cv_work_busy_g = false;
         }
 
         if (trackData.bbox != bbox || trackData.tracking != tracking) {
@@ -180,7 +177,12 @@ int main(int argc, char **argv)
 {
     // Read video
     //VideoCapture video("mcem0_head.mpg");
-    VideoCapture video(0);
+    int videoSrc = 0;
+    if (argc > 1) {
+        istringstream arg1(argv[1]);
+        arg1 >> videoSrc;
+    }
+    VideoCapture video(videoSrc);
 
     // Exit if video is not opened
     if(!video.isOpened())
@@ -190,11 +192,11 @@ int main(int argc, char **argv)
     }
 
     mutex frameMtx_g;
-    atomic_bool cv_work_busy_g{false}, finish_g{false};
+    atomic_bool finish_g{false};
     Mat frame_g;
     TrackData trackData;
     condition_variable frameCondition_g;
-    thread detectAndTrack(detect_and_track_loop, ref(cv_work_busy_g), ref(finish_g),
+    thread detectAndTrack(detect_and_track_loop, ref(finish_g),
                           ref(frameMtx_g), ref(frameCondition_g),
                           ref(frame_g), ref(trackData));
     double scale_f = 2.;
@@ -202,11 +204,13 @@ int main(int argc, char **argv)
     Mat frame;
     while(video.read(frame))
     {
-        if (!cv_work_busy_g) {
-            lock_guard<decltype(frameMtx_g)> lock(frameMtx_g);
-            // Makes a copy to the shared frame
-            resize(frame, frame_g, cv::Size(), 1/scale_f, 1/scale_f);
-            frameCondition_g.notify_one();
+        {
+            std::unique_lock<mutex> lock(frameMtx_g, defer_lock_t());
+            if (lock.try_lock()) {
+                // Makes a copy to the shared frame
+                resize(frame, frame_g, cv::Size(), 1/scale_f, 1/scale_f);
+                frameCondition_g.notify_one();
+            }
         }
 
         {
