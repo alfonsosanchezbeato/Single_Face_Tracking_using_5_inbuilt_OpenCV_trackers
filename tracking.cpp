@@ -19,12 +19,26 @@
 using namespace cv;
 using namespace std;
 
-bool track_frame(const Mat& frame, Tracker& tracker, Rect2d& bbox)
-{
-    return tracker.update(frame, bbox);
-}
+struct TrackThread {
+    mutex dataMtx;
+    struct Input {
+        Input(void) : finish{false} {}
+        condition_variable frameCondition;
+        Mat frame;
+        bool finish;
+    } input;
+    struct Output {
+        Output(void) : tracking{false} {}
+        Rect2d bbox;
+        bool tracking;
+    } output;
 
-bool detect_face(const Mat& frame, Tracker& tracker, Rect2d& bbox)
+    void operator()(void);
+
+    bool detectFace(const Mat& frame, Rect2d& bbox);
+};
+
+bool TrackThread::detectFace(const Mat& frame, Rect2d& bbox)
 {
     // Detect face using Haar Cascade classifier
     CascadeClassifier face_cascade;
@@ -38,20 +52,10 @@ bool detect_face(const Mat& frame, Tracker& tracker, Rect2d& bbox)
     // Get only one face for the moment
     bbox = Rect2d(f[0].x, f[0].y, f[0].width, f[0].height);
 
-    tracker.init(frame, bbox);
-
     return true;
 }
 
-class TrackData {
-public:
-    Rect2d bbox;
-    bool tracking;
-};
-
-void detect_and_track_loop(atomic_bool &finish, mutex &frameMtx,
-                           condition_variable &frameCondition, Mat &frame,
-                           TrackData &trackData)
+void TrackThread::operator()()
 {
     // List of tracker types in OpenCV 3.2
     // NOTE : GOTURN implementation is buggy and does not work.
@@ -88,24 +92,27 @@ void detect_and_track_loop(atomic_bool &finish, mutex &frameMtx,
 
     while (true) {
         {
-            std::unique_lock<mutex> lock(frameMtx);
-            frameCondition.wait(lock);
+            std::unique_lock<mutex> lock(dataMtx);
+            input.frameCondition.wait(lock);
 
             if (tracking)
-                tracking = track_frame(frame, *tracker, bbox);
+                tracking = tracker->update(input.frame, bbox);
 
-            if (!tracking)
-                tracking = detect_face(frame, *tracker, bbox);
+            if (!tracking) {
+                tracking = detectFace(input.frame, bbox);
+                if (tracking)
+                    tracker->init(input.frame, bbox);
+            }
 
-            trackData.bbox = bbox;
-            trackData.tracking = tracking;
+            output.bbox = bbox;
+            output.tracking = tracking;
 
-            cout << "Size is " << frame.cols << " x " << frame.rows
+            cout << "Size is " << input.frame.cols << " x " << input.frame.rows
                  << " . Tracking: " << tracking << '\n';
-        }
 
-        if (finish)
-            break;
+            if (input.finish)
+                break;
+        }
     }
 }
 
@@ -128,50 +135,46 @@ int main(int argc, char **argv)
     }
 
     // Exit if video is not opened
-    if(!video.isOpened())
-    {
+    if (!video.isOpened()) {
         cout << "Could not read video file" << endl;
         return 1;
     }
 
-    mutex frameMtx;
-    atomic_bool finish{false};
-    Mat frame;
-    TrackData trackData;
-    condition_variable frameCondition;
-    thread detectAndTrack(detect_and_track_loop, ref(finish), ref(frameMtx),
-                          ref(frameCondition), ref(frame), ref(trackData));
+    TrackThread tt;
+    thread detectAndTrack{ref(tt)};
 
     double scale_f = 2.;
-    Mat frameLast;
-    while(video.read(frameLast))
+    Mat frame;
+    int key = 0;
+    while (video.read(frame))
     {
         {
-            std::unique_lock<mutex> lock(frameMtx, defer_lock_t());
+            std::unique_lock<mutex> lock(tt.dataMtx, defer_lock_t());
             if (lock.try_lock()) {
+                // Exit if ESC pressed.
+                if(key == 27) {
+                    tt.input.finish = true;
+                    tt.input.frameCondition.notify_one();
+                    break;
+                }
                 // Take latest track result
-                if (trackData.tracking) {
-                    Rect2d bbox(scale_f*trackData.bbox.x,
-                                scale_f*trackData.bbox.y,
-                                scale_f*trackData.bbox.width,
-                                scale_f*trackData.bbox.height);
-                    rectangle(frameLast, bbox, Scalar(255, 0, 0), 2, 1);
+                if (tt.output.tracking) {
+                    Rect2d bbox(scale_f*tt.output.bbox.x,
+                                scale_f*tt.output.bbox.y,
+                                scale_f*tt.output.bbox.width,
+                                scale_f*tt.output.bbox.height);
+                    rectangle(frame, bbox, Scalar(255, 0, 0), 2, 1);
                 }
                 // Makes a copy to the shared frame
-                resize(frameLast, frame, cv::Size(), 1/scale_f, 1/scale_f);
-                frameCondition.notify_one();
+                resize(frame, tt.input.frame, cv::Size(), 1/scale_f, 1/scale_f);
+                tt.input.frameCondition.notify_one();
             }
         }
 
-        imshow("Tracking", frameLast);
+        imshow("Tracking", frame);
 
-        // Exit if ESC pressed.
-        int k = waitKey(1);
-        if(k == 27)
-            break;
+        key = waitKey(1);
     }
 
-    finish = true;
-    frameCondition.notify_one();
     detectAndTrack.join();
 }
