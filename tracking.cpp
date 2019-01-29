@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Author     : Manu BN, Alfonso Sanchez-Beato
+ * Author     : Alfonso Sanchez-Beato, based on example from Manu BN
  * Description: Detect face in the first frame using OpenCV's Haar cascade and
  * track the same using 5 different inbuilt trackers namely :
  * BOOSTING, MIL, KCF, TLD and MEDIANFLOW
@@ -62,7 +62,12 @@ void TrackThread::operator()()
     string trackerTypes[6] = {"BOOSTING", "MIL", "KCF", "TLD",
                               "MEDIANFLOW", "GOTURN"};
     // Create a tracker and select type by choosing indicies
-    string trackerType = trackerTypes[4]; // MEDIANFLOW
+    //string trackerType = trackerTypes[0]; // BOOSTING -> always follows something...
+    //string trackerType = trackerTypes[1]; // MIL -> always follows something...
+    //string trackerType = trackerTypes[2]; // KCF -> always follows something...
+    //string trackerType = trackerTypes[3]; // TLD -> bit slow
+    string trackerType = trackerTypes[4]; // MEDIANFLOW -> fails to track easily
+    //string trackerType = trackerTypes[5]; // GOTURN -> needs file, failing atm
 
     Ptr<Tracker> tracker;
 
@@ -146,6 +151,8 @@ int main(int argc, char **argv)
     double scale_f = 2.;
     Mat frame;
     int key = 0;
+    bool tracking = false;
+    Rect2d bbox;
     while (video.read(frame))
     {
         {
@@ -158,19 +165,19 @@ int main(int argc, char **argv)
                     break;
                 }
                 // Take latest track result
-                if (tt.output.tracking) {
-                    Rect2d bbox(scale_f*tt.output.bbox.x,
-                                scale_f*tt.output.bbox.y,
-                                scale_f*tt.output.bbox.width,
-                                scale_f*tt.output.bbox.height);
-                    rectangle(frame, bbox, Scalar(255, 0, 0), 2, 1);
-                }
+                tracking = tt.output.tracking;
+                bbox = Rect2d(scale_f*tt.output.bbox.x,
+                              scale_f*tt.output.bbox.y,
+                              scale_f*tt.output.bbox.width,
+                              scale_f*tt.output.bbox.height);
                 // Makes a copy to the shared frame
                 resize(frame, tt.input.frame, cv::Size(), 1/scale_f, 1/scale_f);
                 tt.input.frameCondition.notify_one();
             }
         }
 
+        if (tracking)
+            rectangle(frame, bbox, Scalar(255, 0, 0), 2, 1);
         imshow("Tracking", frame);
 
         key = waitKey(1);
