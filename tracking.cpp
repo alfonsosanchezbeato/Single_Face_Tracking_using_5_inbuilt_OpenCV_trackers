@@ -1,8 +1,7 @@
 /*******************************************************************************
  * Author     : Alfonso Sanchez-Beato, based on example from Manu BN
- * Description: Detect face in the first frame using OpenCV's Haar cascade and
- * track the same using 5 different inbuilt trackers namely :
- * BOOSTING, MIL, KCF, TLD and MEDIANFLOW
+ * Description: Detect face using OpenCV's Haar cascade and track it until lost.
+ *  At that point, try to detect face again and track in loop.
  ******************************************************************************/
 #include <atomic>
 #include <future>
@@ -35,6 +34,8 @@ struct TrackThread {
 
     void operator()(void);
 
+private:
+    Ptr<Tracker> createTracker(void);
     bool detectFace(const Mat& frame, Rect2d& bbox);
 };
 
@@ -55,10 +56,9 @@ bool TrackThread::detectFace(const Mat& frame, Rect2d& bbox)
     return true;
 }
 
-void TrackThread::operator()()
+Ptr<Tracker> TrackThread::createTracker(void)
 {
     // List of tracker types in OpenCV 3.2
-    // NOTE : GOTURN implementation is buggy and does not work.
     string trackerTypes[6] = {"BOOSTING", "MIL", "KCF", "TLD",
                               "MEDIANFLOW", "GOTURN"};
     // Create a tracker and select type by choosing indicies
@@ -66,7 +66,7 @@ void TrackThread::operator()()
     //string trackerType = trackerTypes[1]; // MIL -> always follows something...
     //string trackerType = trackerTypes[2]; // KCF -> always follows something...
     //string trackerType = trackerTypes[3]; // TLD -> bit slow
-    string trackerType = trackerTypes[4]; // MEDIANFLOW -> fails to track easily
+    string trackerType = trackerTypes[4]; // MEDIANFLOW -> Best trade-off atm
     //string trackerType = trackerTypes[5]; // GOTURN -> needs file, failing atm
 
     Ptr<Tracker> tracker;
@@ -92,8 +92,14 @@ void TrackThread::operator()()
     }
     #endif
 
+    return tracker;
+}
+
+void TrackThread::operator()()
+{
     bool tracking = false;
     Rect2d bbox;
+    Ptr<Tracker> tracker;
 
     while (true) {
         {
@@ -105,8 +111,14 @@ void TrackThread::operator()()
 
             if (!tracking) {
                 tracking = detectFace(input.frame, bbox);
-                if (tracking)
+                if (tracking) {
+                    // At least for KFC, we need to re-create the tracker when
+                    // the tracked object changes. It looks like a repeated call
+                    // to init does not fully clean the state and the
+                    // performance of the tracker is greatly affected.
+                    tracker = createTracker();
                     tracker->init(input.frame, bbox);
+                }
             }
 
             output.bbox = bbox;
