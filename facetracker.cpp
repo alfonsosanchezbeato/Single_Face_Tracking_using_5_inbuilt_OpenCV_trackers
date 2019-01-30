@@ -43,6 +43,9 @@ bool TrackThread::detectFace(const Mat& frame, Rect2d& bbox)
     CascadeClassifier face_cascade;
     face_cascade.load(HAAR_DATA_DIR "haarcascade_frontalface_alt2.xml");
     vector<Rect> f;
+    // See http://www.emgu.com/wiki/files/1.5.0.0/Help/html/e2278977-87ea-8fa9-b78e-0e52cfe6406a.htm
+    // for flag description. It might be wortwhile to play a bit with the
+    // different parameters.
     face_cascade.detectMultiScale(frame, f, 1.1, 2, CASCADE_SCALE_IMAGE);
     if (f.size() == 0)
         return false;
