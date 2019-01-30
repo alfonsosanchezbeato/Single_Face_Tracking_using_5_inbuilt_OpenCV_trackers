@@ -43,7 +43,7 @@ bool TrackThread::detectFace(const Mat& frame, Rect2d& bbox)
     CascadeClassifier face_cascade;
     face_cascade.load(HAAR_DATA_DIR "haarcascade_frontalface_alt2.xml");
     vector<Rect> f;
-    face_cascade.detectMultiScale(frame, f, 1.1, 2, 0 | CV_HAAR_SCALE_IMAGE);
+    face_cascade.detectMultiScale(frame, f, 1.1, 2, CASCADE_SCALE_IMAGE);
     if (f.size() == 0)
         return false;
 
@@ -69,7 +69,7 @@ Ptr<Tracker> TrackThread::createTracker(void)
 
     Ptr<Tracker> tracker;
 
-    #if (CV_MINOR_VERSION < 3)
+    #if (CV_MAJOR_VERSION <= 3 && CV_MINOR_VERSION < 3)
     {
         tracker = Tracker::create(trackerType);
     }
