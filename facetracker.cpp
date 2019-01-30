@@ -3,6 +3,8 @@
  * Description: Detect face using OpenCV's Haar cascade and track it until lost.
  *  At that point, try to detect face again and track in loop.
  ******************************************************************************/
+#include <stdlib.h>
+
 #include <mutex>
 #include <thread>
 #include <condition_variable>
@@ -17,6 +19,8 @@ using namespace cv;
 using namespace std;
 
 struct TrackThread {
+    TrackThread(void);
+
     mutex dataMtx;
     struct Input {
         Input(void) : finish{false} {}
@@ -33,20 +37,37 @@ struct TrackThread {
     void operator()(void);
 
 private:
+    CascadeClassifier faceCascade;
+
     Ptr<Tracker> createTracker(void);
     bool detectFace(const Mat& frame, Rect2d& bbox);
 };
 
+TrackThread::TrackThread(void)
+{
+    string pathHaarData;
+    const char *snapDir = getenv("SNAP");
+
+    // We make sure things work well if we are in a snap
+    if (snapDir) {
+        pathHaarData.append(snapDir);
+        pathHaarData.append("/usr/share/opencv4/haarcascades/");
+    } else {
+        pathHaarData.append("/usr/share/opencv/haarcascades/");
+    }
+    pathHaarData.append("haarcascade_frontalface_alt2.xml");
+
+    faceCascade.load(pathHaarData);
+}
+
 bool TrackThread::detectFace(const Mat& frame, Rect2d& bbox)
 {
     // Detect face using Haar Cascade classifier
-    CascadeClassifier face_cascade;
-    face_cascade.load(HAAR_DATA_DIR "haarcascade_frontalface_alt2.xml");
     vector<Rect> f;
     // See http://www.emgu.com/wiki/files/1.5.0.0/Help/html/e2278977-87ea-8fa9-b78e-0e52cfe6406a.htm
     // for flag description. It might be wortwhile to play a bit with the
     // different parameters.
-    face_cascade.detectMultiScale(frame, f, 1.1, 2, CASCADE_SCALE_IMAGE);
+    faceCascade.detectMultiScale(frame, f, 1.1, 2, CASCADE_SCALE_IMAGE);
     if (f.size() == 0)
         return false;
 
@@ -96,7 +117,7 @@ Ptr<Tracker> TrackThread::createTracker(void)
     return tracker;
 }
 
-void TrackThread::operator()()
+void TrackThread::operator()(void)
 {
     bool tracking = false;
     Rect2d bbox;
