@@ -38,6 +38,7 @@ struct TrackThread {
 
 private:
     CascadeClassifier faceCascade;
+    bool debug;
 
     Ptr<Tracker> createTracker(void);
     bool detectFace(const Mat& frame, Rect2d& bbox);
@@ -58,20 +59,24 @@ TrackThread::TrackThread(void)
     pathHaarData.append("haarcascade_frontalface_alt2.xml");
 
     faceCascade.load(pathHaarData);
+
+    getenv("FACETRACKER_DEBUG") ? debug = true : debug = false;
 }
 
 bool TrackThread::detectFace(const Mat& frame, Rect2d& bbox)
 {
     // Detect face using Haar Cascade classifier
-    vector<Rect> f;
     // See http://www.emgu.com/wiki/files/1.5.0.0/Help/html/e2278977-87ea-8fa9-b78e-0e52cfe6406a.htm
     // for flag description. It might be wortwhile to play a bit with the
     // different parameters.
+    vector<Rect> f;
     faceCascade.detectMultiScale(frame, f, 1.1, 2, CASCADE_SCALE_IMAGE);
     if (f.size() == 0)
         return false;
 
-    cout << "Detected " << f.size() << " faces \n";
+    if (debug)
+        cout << "Detected " << f.size() << " faces \n";
+
     // Get only one face for the moment
     bbox = Rect2d(f[0].x, f[0].y, f[0].width, f[0].height);
 
@@ -146,8 +151,9 @@ void TrackThread::operator()(void)
             output.bbox = bbox;
             output.tracking = tracking;
 
-            cout << "Size is " << input.frame.cols << " x " << input.frame.rows
-                 << " . Tracking: " << tracking << '\n';
+            if (debug)
+                cout << "Size is " << input.frame.cols << " x "
+                     << input.frame.rows << " . Tracking: " << tracking << '\n';
 
             if (input.finish)
                 break;
