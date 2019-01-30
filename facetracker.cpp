@@ -3,11 +3,9 @@
  * Description: Detect face using OpenCV's Haar cascade and track it until lost.
  *  At that point, try to detect face again and track in loop.
  ******************************************************************************/
-#include <atomic>
-#include <future>
 #include <mutex>
 #include <thread>
-#include <utility>
+#include <condition_variable>
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/tracking.hpp>
