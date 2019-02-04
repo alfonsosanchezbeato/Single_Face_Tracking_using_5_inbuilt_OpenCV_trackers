@@ -9,9 +9,10 @@
 #include <thread>
 #include <condition_variable>
 
+#include <opencv2/core/ocl.hpp>
+#include <opencv2/highgui.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/tracking.hpp>
-#include <opencv2/core/ocl.hpp>
 
 #define HAAR_DATA_DIR "/usr/share/opencv/haarcascades/"
 
@@ -98,12 +99,9 @@ Ptr<Tracker> TrackThread::createTracker(void)
 
     Ptr<Tracker> tracker;
 
-    #if (CV_MAJOR_VERSION <= 3 && CV_MINOR_VERSION < 3)
-    {
+    #if (CV_MAJOR_VERSION <= 3 && CV_MINOR_VERSION <= 2)
         tracker = Tracker::create(trackerType);
-    }
     #else
-    {
         if (trackerType == "BOOSTING")
             tracker = TrackerBoosting::create();
         if (trackerType == "MIL")
@@ -116,7 +114,6 @@ Ptr<Tracker> TrackThread::createTracker(void)
             tracker = TrackerMedianFlow::create();
         if (trackerType == "GOTURN")
             tracker = TrackerGOTURN::create();
-    }
     #endif
 
     return tracker;
@@ -163,6 +160,7 @@ void TrackThread::operator()(void)
 
 int main(int argc, char **argv)
 {
+    static const char *windowTitle = "Tracking";
     // Read video from either camera of video file
     VideoCapture video;
     if (argc == 1) {
@@ -188,6 +186,9 @@ int main(int argc, char **argv)
     TrackThread tt;
     thread detectAndTrack{ref(tt)};
 
+    namedWindow(windowTitle, WND_PROP_FULLSCREEN);
+    setWindowProperty(windowTitle, WND_PROP_FULLSCREEN, WINDOW_FULLSCREEN);
+
     double scale_f = 2.;
     Mat frame;
     int key = 0;
@@ -211,14 +212,26 @@ int main(int argc, char **argv)
                               scale_f*tt.output.bbox.width,
                               scale_f*tt.output.bbox.height);
                 // Makes a copy to the shared frame
-                resize(frame, tt.input.frame, cv::Size(), 1/scale_f, 1/scale_f);
+                resize(frame, tt.input.frame, Size(), 1/scale_f, 1/scale_f);
                 tt.input.frameCondition.notify_one();
             }
         }
 
         if (tracking)
-            rectangle(frame, bbox, Scalar(255, 0, 0), 2, 1);
-        imshow("Tracking", frame);
+            rectangle(frame, bbox, Scalar(255, 0, 0), 4, 1);
+
+        #if (CV_MAJOR_VERSION <= 3 && CV_MINOR_VERSION <= 3)
+            imshow(windowTitle, frame);
+        #else
+            Mat frameWin;
+            Size winSize = getWindowImageRect(windowTitle).size();
+            if (winSize.width > 0 && winSize.height > 0)
+                resize(frame, frameWin, winSize);
+            else
+                frameWin = frame;
+
+            imshow(windowTitle, frameWin);
+        #endif
 
         key = waitKey(1);
     }
