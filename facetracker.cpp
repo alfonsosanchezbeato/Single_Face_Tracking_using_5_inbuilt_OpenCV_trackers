@@ -3,8 +3,6 @@
  * Description: Detect face using OpenCV's Haar cascade and track it until lost.
  *  At that point, try to detect face again and track in loop.
  ******************************************************************************/
-#include <stdlib.h>
-
 #include <mutex>
 #include <thread>
 #include <condition_variable>
@@ -14,38 +12,20 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/tracking.hpp>
 
-#define HAAR_DATA_DIR "/usr/share/opencv/haarcascades/"
-
 using namespace cv;
 using namespace std;
 
-struct TrackThread {
-    TrackThread(void);
-
-    mutex dataMtx;
-    struct Input {
-        Input(void) : finish{false} {}
-        condition_variable frameCondition;
-        Mat frame;
-        bool finish;
-    } input;
-    struct Output {
-        Output(void) : tracking{false} {}
-        Rect2d bbox;
-        bool tracking;
-    } output;
-
-    void operator()(void);
+struct FaceDetector {
+    FaceDetector(void);
+    bool detectFace(const Mat& frame, Rect2d& bbox);
 
 private:
-    CascadeClassifier faceCascade;
     bool debug;
-
-    Ptr<Tracker> createTracker(void);
-    bool detectFace(const Mat& frame, Rect2d& bbox);
+    CascadeClassifier faceCascade;
 };
 
-TrackThread::TrackThread(void)
+FaceDetector::FaceDetector(void) :
+    debug{getenv("FACETRACKER_DEBUG") ? true : false}
 {
     string pathHaarData;
     const char *snapDir = getenv("SNAP");
@@ -60,11 +40,9 @@ TrackThread::TrackThread(void)
     pathHaarData.append("haarcascade_frontalface_alt2.xml");
 
     faceCascade.load(pathHaarData);
-
-    getenv("FACETRACKER_DEBUG") ? debug = true : debug = false;
 }
 
-bool TrackThread::detectFace(const Mat& frame, Rect2d& bbox)
+bool FaceDetector::detectFace(const Mat& frame, Rect2d& bbox)
 {
     // Detect face using Haar Cascade classifier
     // See http://www.emgu.com/wiki/files/1.5.0.0/Help/html/e2278977-87ea-8fa9-b78e-0e52cfe6406a.htm
@@ -82,6 +60,51 @@ bool TrackThread::detectFace(const Mat& frame, Rect2d& bbox)
     bbox = Rect2d(f[0].x, f[0].y, f[0].width, f[0].height);
 
     return true;
+}
+
+struct TrackThread {
+    TrackThread(void);
+    ~TrackThread(void);
+
+    struct Output {
+        Output(void) : tracking{false} {}
+        Rect2d bbox;
+        bool tracking;
+    };
+
+    void process(const Mat& in, Output& out);
+
+private:
+    mutex dataMtx;
+    condition_variable frameCondition;
+    Mat frame;
+    Output output;
+    bool debug, finish;
+    double scale_f = 2.;
+    FaceDetector faceDetector;
+    // Keep this last as it uses the other members
+    thread processThread;
+
+    void operator()(void);
+    Ptr<Tracker> createTracker(void);
+};
+
+TrackThread::TrackThread(void) :
+    debug{getenv("FACETRACKER_DEBUG") ? true : false},
+    finish{false},
+    processThread{&TrackThread::operator(), this}
+{
+}
+
+TrackThread::~TrackThread(void)
+{
+    {
+        std::unique_lock<mutex> lock(dataMtx);
+        finish = true;
+        frameCondition.notify_one();
+    }
+
+    processThread.join();
 }
 
 Ptr<Tracker> TrackThread::createTracker(void)
@@ -128,20 +151,23 @@ void TrackThread::operator()(void)
     while (true) {
         {
             std::unique_lock<mutex> lock(dataMtx);
-            input.frameCondition.wait(lock);
+            frameCondition.wait(lock);
+
+            if (finish)
+                break;
 
             if (tracking)
-                tracking = tracker->update(input.frame, bbox);
+                tracking = tracker->update(frame, bbox);
 
             if (!tracking) {
-                tracking = detectFace(input.frame, bbox);
+                tracking = faceDetector.detectFace(frame, bbox);
                 if (tracking) {
                     // At least for KFC, we need to re-create the tracker when
                     // the tracked object changes. It looks like a repeated call
                     // to init does not fully clean the state and the
                     // performance of the tracker is greatly affected.
                     tracker = createTracker();
-                    tracker->init(input.frame, bbox);
+                    tracker->init(frame, bbox);
                 }
             }
 
@@ -149,12 +175,25 @@ void TrackThread::operator()(void)
             output.tracking = tracking;
 
             if (debug)
-                cout << "Size is " << input.frame.cols << " x "
-                     << input.frame.rows << " . Tracking: " << tracking << '\n';
-
-            if (input.finish)
-                break;
+                cout << "Size is " << frame.cols << " x " << frame.rows
+                     << " . Tracking: " << tracking << '\n';
         }
+    }
+}
+
+void TrackThread::process(const Mat& in, TrackThread::Output& out)
+{
+    std::unique_lock<mutex> lock(dataMtx, defer_lock_t());
+    if (lock.try_lock()) {
+        // Take latest track result
+        out.tracking = output.tracking;
+        out.bbox = Rect2d(scale_f*output.bbox.x,
+                          scale_f*output.bbox.y,
+                          scale_f*output.bbox.width,
+                          scale_f*output.bbox.height);
+        // Makes a copy to the shared frame
+        resize(in, frame, Size(), 1/scale_f, 1/scale_f);
+        frameCondition.notify_one();
     }
 }
 
@@ -177,64 +216,39 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // Exit if video is not opened
     if (!video.isOpened()) {
-        cout << "Could not read video file" << endl;
+        cout << "Could not open video source\n";
         return 1;
     }
-
-    TrackThread tt;
-    thread detectAndTrack{ref(tt)};
 
     namedWindow(windowTitle, WND_PROP_FULLSCREEN);
     setWindowProperty(windowTitle, WND_PROP_FULLSCREEN, WINDOW_FULLSCREEN);
 
-    double scale_f = 2.;
-    Mat frame;
-    int key = 0;
-    bool tracking = false;
-    Rect2d bbox;
-    while (video.read(frame))
+    TrackThread tt;
+    Mat in;
+    TrackThread::Output out;
+    while (video.read(in))
     {
-        {
-            std::unique_lock<mutex> lock(tt.dataMtx, defer_lock_t());
-            if (lock.try_lock()) {
-                // Exit if ESC pressed.
-                if(key == 27) {
-                    tt.input.finish = true;
-                    tt.input.frameCondition.notify_one();
-                    break;
-                }
-                // Take latest track result
-                tracking = tt.output.tracking;
-                bbox = Rect2d(scale_f*tt.output.bbox.x,
-                              scale_f*tt.output.bbox.y,
-                              scale_f*tt.output.bbox.width,
-                              scale_f*tt.output.bbox.height);
-                // Makes a copy to the shared frame
-                resize(frame, tt.input.frame, Size(), 1/scale_f, 1/scale_f);
-                tt.input.frameCondition.notify_one();
-            }
-        }
+        tt.process(in, out);
 
-        if (tracking)
-            rectangle(frame, bbox, Scalar(255, 0, 0), 4, 1);
+        if (out.tracking)
+            rectangle(in, out.bbox, Scalar(255, 0, 0), 4, 1);
 
         #if (CV_MAJOR_VERSION <= 3 && CV_MINOR_VERSION <= 3)
-            imshow(windowTitle, frame);
+            imshow(windowTitle, in);
         #else
             Mat frameWin;
             Size winSize = getWindowImageRect(windowTitle).size();
             if (winSize.width > 0 && winSize.height > 0)
-                resize(frame, frameWin, winSize);
+                resize(in, frameWin, winSize);
             else
-                frameWin = frame;
+                frameWin = in;
 
             imshow(windowTitle, frameWin);
         #endif
 
-        key = waitKey(1);
+        // Exit if ESC pressed
+        if (waitKey(1) == 27)
+            break;
     }
-
-    detectAndTrack.join();
 }
