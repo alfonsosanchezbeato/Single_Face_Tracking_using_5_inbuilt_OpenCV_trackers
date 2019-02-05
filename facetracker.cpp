@@ -221,8 +221,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    namedWindow(windowTitle, WND_PROP_FULLSCREEN);
-    setWindowProperty(windowTitle, WND_PROP_FULLSCREEN, WINDOW_FULLSCREEN);
+    namedWindow(windowTitle, WINDOW_NORMAL);
+    //setWindowProperty(windowTitle, WND_PROP_FULLSCREEN, WINDOW_FULLSCREEN);
 
     TrackThread tt;
     Mat in;
@@ -232,20 +232,9 @@ int main(int argc, char **argv)
         tt.process(in, out);
 
         if (out.tracking)
-            rectangle(in, out.bbox, Scalar(255, 0, 0), 4, 1);
+            rectangle(in, out.bbox, Scalar(255, 0, 0), 8, 1);
 
-        #if (CV_MAJOR_VERSION <= 3 && CV_MINOR_VERSION <= 3)
-            imshow(windowTitle, in);
-        #else
-            Mat frameWin;
-            Size winSize = getWindowImageRect(windowTitle).size();
-            if (winSize.width > 0 && winSize.height > 0)
-                resize(in, frameWin, winSize);
-            else
-                frameWin = in;
-
-            imshow(windowTitle, frameWin);
-        #endif
+        imshow(windowTitle, in);
 
         // Exit if ESC pressed
         if (waitKey(1) == 27)
