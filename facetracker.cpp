@@ -15,8 +15,11 @@
 using namespace cv;
 using namespace std;
 
+// Detects faces on video frames
 struct FaceDetector {
     FaceDetector(void);
+    // If a face is detected in frame, returs true and fills bbox with a square
+    // containing it.
     bool detectFace(const Mat& frame, Rect2d& bbox);
 
 private:
@@ -62,16 +65,20 @@ bool FaceDetector::detectFace(const Mat& frame, Rect2d& bbox)
     return true;
 }
 
+// Detects and tracks faces in video data, using a separate thread
 struct TrackThread {
     TrackThread(void);
     ~TrackThread(void);
 
     struct Output {
-        Output(void) : tracking{false} {}
         Rect2d bbox;
-        bool tracking;
+        bool tracking{false};
     };
 
+    // If the tracking thread is busy, it does nothing. Otherwise, it pushes a
+    // new frame to the thread and refreshes "out" with the new tracking data
+    // (saying if we are tracking something and the bounding box in the frame if
+    // that is the case).
     void process(const Mat& in, Output& out);
 
 private:
@@ -80,19 +87,17 @@ private:
     Mat frame;
     Output output;
     bool debug, finish;
-    double scale_f = 2.;
-    FaceDetector faceDetector;
     // Keep this last as it uses the other members
     thread processThread;
 
-    void operator()(void);
+    void threadMethod(void);
     Ptr<Tracker> createTracker(void);
 };
 
 TrackThread::TrackThread(void) :
     debug{getenv("FACETRACKER_DEBUG") ? true : false},
     finish{false},
-    processThread{&TrackThread::operator(), this}
+    processThread{&TrackThread::threadMethod, this}
 {
 }
 
@@ -142,11 +147,12 @@ Ptr<Tracker> TrackThread::createTracker(void)
     return tracker;
 }
 
-void TrackThread::operator()(void)
+void TrackThread::threadMethod(void)
 {
     bool tracking = false;
     Rect2d bbox;
     Ptr<Tracker> tracker;
+    FaceDetector faceDetector;
 
     while (true) {
         {
@@ -183,6 +189,8 @@ void TrackThread::operator()(void)
 
 void TrackThread::process(const Mat& in, TrackThread::Output& out)
 {
+    static const double scale_f = 2.;
+
     std::unique_lock<mutex> lock(dataMtx, defer_lock_t());
     if (lock.try_lock()) {
         // Take latest track result
